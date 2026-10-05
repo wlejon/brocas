@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# brocas has no sibling dependencies; BLAKE3 is vendored under
+# third_party/blake3. The repo is still checked out into a named path
+# (brocas/), the layout every sibling's CI uses, so the steps read the same
+# everywhere.
+#
+# The matrix covers both BLAKE3 back ends that matter: x86-64 (SSE2 through
+# AVX-512, dispatched at run time) on Linux and Windows, NEON on macOS arm64.
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-gcc,          os: ubuntu-24.04, cc: gcc,   cxx: g++,     config: Release }
+          - { name: linux-clang,        os: ubuntu-24.04, cc: clang, cxx: clang++, config: Release }
+          - { name: windows-msvc,       os: windows-2022,                          config: Release }
+          # Debug CRT: iterator debugging and the library's own assert()s.
+          - { name: windows-msvc-debug, os: windows-2022,                          config: Debug }
+          - { name: macos-arm64,        os: macos-15,                              config: Release }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: brocas
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake -S brocas -B build
+          else
+            cmake -S brocas -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          fi
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+
+  # ── Coverage ──────────────────────────────────────────────────────────────
+  #
+  # Scoped to brocas' own src/ and include/. third_party/blake3 is excluded: it
+  # is vendored and checked against the official vectors, not measured here.
+  # Debug (-O0), so this is also the Linux job where assert()s are live.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: brocas
+
+      - name: Install gcovr + Ninja
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcovr ninja-build
+
+      - name: Configure (instrumented)
+        run: |
+          cmake -S brocas -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBROCAS_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # pipefail: piping gcovr into tee otherwise hands the step tee's exit
+      # status, so a gcovr crash produces no report and the job still goes green.
+      #
+      # Run from the workspace root, where build/ is, with the filters spelled
+      # brocas/...: gcovr only looks for .gcda files under its root.
+      - name: Report
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p coverage-html
+          gcovr --root . \
+            --filter 'brocas/src/' --filter 'brocas/include/brocas/' \
+            --exclude 'brocas/third_party/' \
+            --exclude-unreachable-branches \
+            --print-summary \
+            --html-details coverage-html/index.html \
+            | tee coverage-summary.txt
+          test -s coverage-html/index.html
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## Coverage — `src/` + `include/brocas/`'
+            echo
+            echo 'Vendored `third_party/blake3` is excluded: it is not ours, and the official test vectors check it.'
+            echo
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage-html/
+          retention-days: 14

@@ -1,0 +1,65 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+# The sync protocol is the reason this is worth running. brocas parses frames,
+# manifests and chunk lists that arrive from another machine, then turns the
+# names in a manifest into paths it writes on checkout. Out-of-bounds reads in
+# the framing parser, integer overflow in a length field, and path traversal
+# out of the checkout root are the realistic bugs, and they are what the C++
+# queries look for.
+jobs:
+  analyze:
+    name: Analyze C++
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: brocas
+
+      - name: Install Ninja
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Configure
+        run: cmake -S brocas -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      # Vendored BLAKE3 is built here, ahead of `init`, which is what keeps it
+      # out of the analysis: for a compiled language CodeQL analyses what it
+      # observes the compiler compile while tracing, and `paths-ignore` does not
+      # filter compiled sources. BLAKE3's SIMD kernels are upstream's to answer
+      # for, and a wall of alerts nobody here can action is how a Security tab
+      # ends up ignored on the day a genuine brocas bug lands.
+      - name: Pre-build vendored code (outside the traced build)
+        run: cmake --build build --parallel 4 --target blake3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          build-mode: manual
+          source-root: brocas
+          queries: security-extended
+
+      # Only brocas' own TUs are left to compile, so only they are traced.
+      - name: Build brocas (traced)
+        run: cmake --build build --parallel 4
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp

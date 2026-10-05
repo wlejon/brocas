@@ -1,0 +1,30 @@
+version: 2
+
+# No package manifest to watch: third_party/blake3 is a checked-in copy, not a
+# dependency Dependabot can resolve. That leaves the pinned actions in
+# .github/workflows/.
+#
+# Note that BLAKE3 therefore updates by hand (the vendored version is
+# BLAKE3_VERSION_STRING in third_party/blake3/blake3.h); nothing here will tell
+# you when upstream releases.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [ci]
+    commit-message:
+      prefix: "ci"
+    ignore:
+      # GitHub maintains the `v4` major tag and ships security fixes to it, so
+      # `@v4` is already patched without any PR. Pinning to an exact patch would
+      # trade that automatic patching for a codeql-action PR in every repo on
+      # each release. Major bumps (v4 -> v5) still come through.
+      - dependency-name: "github/codeql-action"
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"

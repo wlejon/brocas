@@ -16,6 +16,18 @@ endif()
 
 option(BROCAS_BUILD_TESTS "Build brocas tests" ${_brocas_top_level})
 
+# Coverage. Scoped to a top-level build: a consumer that add_subdirectory()s
+# brocas has no business having its own build instrumented from in here.
+option(BROCAS_COVERAGE "Instrument the build for gcov coverage (GCC/Clang)" OFF)
+if(BROCAS_COVERAGE AND _brocas_top_level)
+    if(MSVC)
+        message(FATAL_ERROR "BROCAS_COVERAGE requires GCC or Clang (gcov instrumentation); MSVC is unsupported.")
+    endif()
+    add_compile_options(--coverage -O0 -g)
+    add_link_options(--coverage)
+    message(STATUS "brocas: coverage instrumentation ON (-O0)")
+endif()
+
 function(brocas_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /MP)

@@ -1,6 +1,8 @@
 # brocas
 
-Content-addressed storage (CAS), Merkle DAG manifests, FastCDC chunking, and wire sync library in C++20. Part of the substrate for a cross-platform desktop environment on the bro app runtime (`D:/projects/bro`). A standalone C++20 library: no dependency on bro, bronze, or other siblings, its own CMake and ctest.
+[![CI](https://github.com/wlejon/brocas/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/brocas/actions/workflows/ci.yml)
+
+Content-addressed storage (CAS), Merkle DAG manifests, FastCDC chunking, and wire sync library in C++20. Part of the substrate for a cross-platform desktop environment on the [bro](https://github.com/wlejon/bro) app runtime. A standalone C++20 library: no dependency on bro, bronze, or other siblings, its own CMake and ctest.
 
 ## Architecture
 
@@ -18,7 +20,7 @@ include/brocas/
 ## Features
 
 - **BLAKE3 Cryptographic Hashing**:
-  - Vendored clean C reference implementation under `third_party/blake3/` (Apache 2.0 / CC0 / MIT).
+  - Vendored upstream BLAKE3 1.5.0 C implementation under `third_party/blake3/`: portable plus SSE2 / SSE4.1 / AVX2 / AVX-512 (chosen at run time) on x86-64 and NEON on arm64. BLAKE3 is CC0 1.0 or Apache 2.0, at your option; its license is `third_party/blake3/LICENSE`.
   - Strongly typed `Hash256` (32 bytes, hex string conversions, ordering operators, `std::hash`).
   - `Hasher` supporting one-shot hashing, stream hashing, and file hashing.
 
@@ -53,6 +55,8 @@ include/brocas/
     - Resumable transfers: if connection drops mid-transfer, re-running sync checks local store and requests ONLY the remaining unverified chunks.
 
 ## Building
+
+There is nothing to fetch: BLAKE3 is vendored, and brocas needs only CMake 3.24+ and a C++20 compiler (MSVC, GCC or Clang).
 
 ### Windows (MSVC, Visual Studio generator)
 
