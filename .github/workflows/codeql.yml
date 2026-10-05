@@ -35,8 +35,10 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
 
+      # Tests off: they are scaffolding (scratch paths, child processes on
+      # purpose), not shipped code, and alerts in them would only be noise.
       - name: Configure
-        run: cmake -S brocas -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S brocas -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBROCAS_BUILD_TESTS=OFF
 
       # Vendored BLAKE3 is built here, ahead of `init`, which is what keeps it
       # out of the analysis: for a compiled language CodeQL analyses what it
