@@ -16,13 +16,14 @@ struct ChunkOptions {
     uint32_t min_size = 16 * 1024;    // 16 KiB
     uint32_t avg_size = 64 * 1024;    // 64 KiB
     uint32_t max_size = 256 * 1024;   // 256 KiB
-    uint32_t normalization = 2;       // Normalized chunking level N
+    uint32_t normalization = 1;       // Normalized chunking level N (default: 1, matching FastCDC 2016)
 };
 
 struct ChunkInfo {
     Hash256 hash;
     uint64_t offset = 0;
     uint32_t size = 0;
+    uint64_t gear_hash = 0;
 
     auto operator<=>(const ChunkInfo& other) const = default;
     bool operator==(const ChunkInfo& other) const = default;

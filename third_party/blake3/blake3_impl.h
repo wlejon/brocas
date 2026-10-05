@@ -162,6 +162,13 @@ INLINE void load_key_words(const uint8_t key[BLAKE3_KEY_LEN],
   key_words[7] = load32(&key[7 * 4]);
 }
 
+INLINE void load_block_words(const uint8_t block[BLAKE3_BLOCK_LEN],
+                             uint32_t block_words[16]) {
+  for (size_t i = 0; i < 16; i++) {
+    block_words[i] = load32(&block[i * 4]);
+  }
+}
+
 INLINE void store32(void *dst, uint32_t w) {
   uint8_t *p = (uint8_t *)dst;
   p[0] = (uint8_t)(w >> 0);

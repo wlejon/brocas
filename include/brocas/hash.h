@@ -64,17 +64,26 @@ public:
     void update(std::span<const uint8_t> bytes);
 
     Hash256 finalize() const;
+    void finalize_xof(uint8_t* out, size_t out_len) const;
+    void finalize_seek_xof(uint64_t seek, uint8_t* out, size_t out_len) const;
     void reset();
+
+    static Hasher new_keyed(const uint8_t key[32]);
+    static Hasher new_derive_key(std::string_view context);
 
     static Hash256 hash(const void* data, size_t size);
     static Hash256 hash(std::span<const uint8_t> bytes);
     static Hash256 hash(std::string_view sv);
+    static Hash256 hash_keyed(const uint8_t key[32], const void* data, size_t size);
+    static Hash256 derive_key(std::string_view context, const void* data, size_t size);
     static std::optional<Hash256> hash_file(const std::filesystem::path& path);
 
 private:
     static constexpr size_t kStateSize = 2048;
     alignas(8) uint8_t state_[kStateSize];
 };
+
+size_t blake3_simd_degree() noexcept;
 
 } // namespace bro::cas
 

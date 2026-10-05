@@ -133,8 +133,30 @@ Hash256 Hasher::finalize() const {
     return out;
 }
 
+void Hasher::finalize_xof(uint8_t* out, size_t out_len) const {
+    blake3_hasher copy = *as_blake3(state_);
+    blake3_hasher_finalize(&copy, out, out_len);
+}
+
+void Hasher::finalize_seek_xof(uint64_t seek, uint8_t* out, size_t out_len) const {
+    blake3_hasher copy = *as_blake3(state_);
+    blake3_hasher_finalize_seek(&copy, seek, out, out_len);
+}
+
 void Hasher::reset() {
     blake3_hasher_reset(as_blake3(state_));
+}
+
+Hasher Hasher::new_keyed(const uint8_t key[32]) {
+    Hasher h;
+    blake3_hasher_init_keyed(as_blake3(h.state_), key);
+    return h;
+}
+
+Hasher Hasher::new_derive_key(std::string_view context) {
+    Hasher h;
+    blake3_hasher_init_derive_key_raw(as_blake3(h.state_), context.data(), context.size());
+    return h;
 }
 
 Hash256 Hasher::hash(const void* data, size_t size) {
@@ -151,6 +173,18 @@ Hash256 Hasher::hash(std::string_view sv) {
     return hash(sv.data(), sv.size());
 }
 
+Hash256 Hasher::hash_keyed(const uint8_t key[32], const void* data, size_t size) {
+    Hasher h = new_keyed(key);
+    h.update(data, size);
+    return h.finalize();
+}
+
+Hash256 Hasher::derive_key(std::string_view context, const void* data, size_t size) {
+    Hasher h = new_derive_key(context);
+    h.update(data, size);
+    return h.finalize();
+}
+
 std::optional<Hash256> Hasher::hash_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -162,6 +196,10 @@ std::optional<Hash256> Hasher::hash_file(const std::filesystem::path& path) {
         h.update(buffer.data(), static_cast<size_t>(file.gcount()));
     }
     return h.finalize();
+}
+
+size_t blake3_simd_degree() noexcept {
+    return ::blake3_simd_degree();
 }
 
 } // namespace bro::cas

@@ -142,11 +142,61 @@ void test_fastcdc_edge_cases() {
     TEST_CHECK_EQ(small_chunks[0].hash, Hasher::hash(small_data));
 }
 
+void test_fastcdc_reference_cut_points() {
+    // 1MB buffer generated with deterministic PRNG (xorshift32 seed 0x12345678)
+    std::vector<uint8_t> data(1024 * 1024);
+    uint32_t state = 0x12345678;
+    for (size_t i = 0; i < data.size(); ++i) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        data[i] = static_cast<uint8_t>(state & 0xFF);
+    }
+
+    // Reference test 1: Level 1 normalization (min 16K, avg 64K, max 256K)
+    // Matches the reference fastcdc-rs v2016 crate output exactly
+    ChunkOptions opt1;
+    opt1.min_size = 16384;
+    opt1.avg_size = 65536;
+    opt1.max_size = 262144;
+    opt1.normalization = 1;
+
+    struct RefChunk {
+        uint64_t offset;
+        uint32_t size;
+        uint64_t gear_hash;
+    };
+
+    const RefChunk expected_level1[] = {
+        {0, 100081, 4072106117220571215ULL},
+        {100081, 33106, 14137362593058686335ULL},
+        {133187, 69903, 7185535606873955599ULL},
+        {203090, 49442, 7780573262029293123ULL},
+        {252532, 103705, 10876197567942404917ULL},
+        {356237, 144977, 18358084200376352673ULL},
+        {501214, 214287, 17156221028044163364ULL},
+        {715501, 145480, 2532751769825228491ULL},
+        {860981, 50981, 5661905304397578966ULL},
+        {911962, 37677, 9871895197194652133ULL},
+        {949639, 79457, 3383617910718365507ULL},
+        {1029096, 19480, 0ULL}
+    };
+
+    auto chunks1 = chunk_buffer(data, opt1);
+    TEST_CHECK_EQ(chunks1.size(), sizeof(expected_level1) / sizeof(expected_level1[0]));
+    for (size_t i = 0; i < chunks1.size(); ++i) {
+        TEST_CHECK_EQ(chunks1[i].offset, expected_level1[i].offset);
+        TEST_CHECK_EQ(chunks1[i].size, expected_level1[i].size);
+        TEST_CHECK_EQ(chunks1[i].gear_hash, expected_level1[i].gear_hash);
+    }
+}
+
 int main() {
     test_fastcdc_bounds();
     test_fastcdc_stream_consistency();
     test_fastcdc_deduplication();
     test_fastcdc_edge_cases();
+    test_fastcdc_reference_cut_points();
     std::cout << "All FastCDC tests passed!" << std::endl;
     return 0;
 }

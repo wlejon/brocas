@@ -32,15 +32,41 @@ set(BLAKE3_SOURCES
     third_party/blake3/blake3_portable.c
 )
 
-add_library(blake3 STATIC ${BLAKE3_SOURCES})
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)")
+    list(APPEND BLAKE3_SOURCES third_party/blake3/blake3_neon.c)
+    add_library(blake3 STATIC ${BLAKE3_SOURCES})
+    target_compile_definitions(blake3 PRIVATE BLAKE3_USE_NEON=1)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)" OR (MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8))
+    list(APPEND BLAKE3_SOURCES
+        third_party/blake3/blake3_sse2.c
+        third_party/blake3/blake3_sse41.c
+        third_party/blake3/blake3_avx2.c
+        third_party/blake3/blake3_avx512.c
+    )
+    add_library(blake3 STATIC ${BLAKE3_SOURCES})
+    if(MSVC)
+        set_source_files_properties(third_party/blake3/blake3_sse2.c PROPERTIES COMPILE_FLAGS "/arch:SSE2")
+        set_source_files_properties(third_party/blake3/blake3_sse41.c PROPERTIES COMPILE_FLAGS "/arch:AVX")
+        set_source_files_properties(third_party/blake3/blake3_avx2.c PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+        set_source_files_properties(third_party/blake3/blake3_avx512.c PROPERTIES COMPILE_FLAGS "/arch:AVX512")
+    else()
+        set_source_files_properties(third_party/blake3/blake3_sse2.c PROPERTIES COMPILE_FLAGS "-msse2")
+        set_source_files_properties(third_party/blake3/blake3_sse41.c PROPERTIES COMPILE_FLAGS "-msse4.1")
+        set_source_files_properties(third_party/blake3/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
+        set_source_files_properties(third_party/blake3/blake3_avx512.c PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512vl")
+    endif()
+else()
+    add_library(blake3 STATIC ${BLAKE3_SOURCES})
+    target_compile_definitions(blake3 PRIVATE
+        BLAKE3_NO_AVX512
+        BLAKE3_NO_AVX2
+        BLAKE3_NO_SSE41
+        BLAKE3_NO_SSE2
+        BLAKE3_USE_NEON=0
+    )
+endif()
+
 target_include_directories(blake3 PUBLIC third_party/blake3)
-target_compile_definitions(blake3 PRIVATE
-    BLAKE3_NO_AVX512
-    BLAKE3_NO_AVX2
-    BLAKE3_NO_SSE41
-    BLAKE3_NO_SSE2
-    BLAKE3_USE_NEON=0
-)
 if(MSVC)
     target_compile_definitions(blake3 PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
@@ -56,6 +82,7 @@ set(BROCAS_SOURCES
     src/manifest_diff.cpp
     src/protocol.cpp
     src/sync.cpp
+    src/socket_transport.cpp
 )
 
 add_library(brocas STATIC ${BROCAS_SOURCES})
@@ -71,6 +98,9 @@ target_include_directories(brocas
 )
 
 target_link_libraries(brocas PRIVATE blake3)
+if(WIN32)
+    target_link_libraries(brocas PUBLIC ws2_32)
+endif()
 brocas_warnings(brocas)
 
 if(WIN32)
