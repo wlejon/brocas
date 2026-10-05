@@ -1,0 +1,7 @@
+build/
+build-*/
+*.tar.gz
+.vs/
+*.user
+*.suo
+.DS_Store
