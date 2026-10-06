@@ -1,96 +1,142 @@
 # brocas
 
 [![CI](https://github.com/wlejon/brocas/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/brocas/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Content-addressed storage (CAS), Merkle DAG manifests, FastCDC chunking, and wire sync library in C++20. Part of the substrate for a cross-platform desktop environment on the [bro](https://github.com/wlejon/bro) app runtime. A standalone C++20 library: no dependency on bro, bronze, or other siblings, its own CMake and ctest.
+Content-addressed storage (CAS), Merkle DAG manifests, Fast Content-Defined Chunking (FastCDC),
+and wire sync protocol in pure C++20. A standalone library providing efficient deduplication,
+resumable delta transfer, and verifiable file tree serialization.
 
-## Architecture
+brocas sits in the desktop-environment layer of the
+[bro ecosystem](https://github.com/wlejon/bro/blob/main/docs/ecosystem.md). It serves as the
+foundational data-storage and synchronization substrate across the ecosystem, designed to
+operate independently with zero dependencies on bro, bronze, or other sibling libraries.
+
+## Architecture & API Overview
 
 ```
 include/brocas/
-  cas.h            Umbrella header
-  hash.h           Hash256 (32 bytes, hex formatting/parsing, operators, std::hash) & Hasher (BLAKE3)
-  fastcdc.h        Fast Content-Defined Chunking with Gear hashing and normalized masks
-  store.h          Disk-backed CAS chunk store, sharded layout, atomic writes, GC mark-and-sweep
-  manifest.h       Directory & file Merkle DAG, canonical serialization, ingest, checkout, diff
-  protocol.h       Wire framing (BRCA magic, CRC32), message types, binary framing parser
-  sync.h           Wire sync engine ("send only what receiver lacks"), resumable transfers, transport
+  cas.h               Umbrella header
+  hash.h              Hash256 (32-byte strongly typed hash) and Hasher (BLAKE3)
+  fastcdc.h           Fast Content-Defined Chunking (Gear hashing, normalized chunk masks)
+  store.h             Disk-backed sharded CAS chunk store, atomic writes, mark-and-sweep GC
+  manifest.h          Merkle DAG directory and file manifests, canonical serialization, diff
+  protocol.h          Binary wire framing (BRCA magic, CRC32, framing parser, message types)
+  sync.h              Sync wire engine ("send only what receiver lacks", resumable transfers)
+  socket_transport.h  Stream socket transport interface for network sync
 ```
 
-## Features
+### Key Modules
 
-- **BLAKE3 Cryptographic Hashing**:
-  - Vendored upstream BLAKE3 1.5.0 C implementation under `third_party/blake3/`: portable plus SSE2 / SSE4.1 / AVX2 / AVX-512 (chosen at run time) on x86-64 and NEON on arm64. BLAKE3 is CC0 1.0 or Apache 2.0, at your option; its license is `third_party/blake3/LICENSE`.
-  - Strongly typed `Hash256` (32 bytes, hex string conversions, ordering operators, `std::hash`).
-  - `Hasher` supporting one-shot hashing, stream hashing, and file hashing.
+- **BLAKE3 Cryptographic Hashing (`hash.h`):** Vendored upstream BLAKE3 1.5.0
+  (`third_party/blake3/`) with automatic SIMD runtime dispatch (SSE2, SSE4.1, AVX2, AVX-512,
+  ARM NEON). Provides strongly typed `Hash256` value objects (with hex conversions, ordering,
+  and `std::hash`) and `Hasher` for incremental and file streams.
+- **Fast Content-Defined Chunking (`fastcdc.h`):** Gear hash matrix with normalized chunking
+  masks to minimize chunk size variance. Configurable `min_size` (default 16 KiB), `avg_size`
+  (default 64 KiB), and `max_size` (default 256 KiB). Small localized edits in multi-megabyte
+  files leave >90% of chunks identical.
+- **Content-Addressed Store (`store.h`):** Disk-backed chunk repository with a sharded
+  two-level directory structure (`.cas/chunks/ab/cd/<hash>`). Writes stage to temporary files
+  and commit with atomic renames. Detects corruption or bit rot on read. Mark-and-sweep
+  garbage collection (`collect_garbage()`) reclaims unreferenced chunks from registered root
+  manifests.
+- **Merkle DAG Manifests (`manifest.h`):** Directory and file tree representations capturing
+  file modes, permissions, timestamps, sizes, and symlink targets. Large files are chunked
+  into Merkle trees of FastCDC chunks (`FileManifest`). Deterministic canonical serialization
+  guarantees identical hash trees for identical directory states. Supports `ingest_directory()`,
+  `checkout_directory()`, and `diff_manifests()`.
+- **Wire Framing & Sync Protocol (`protocol.h`, `sync.h`):** Binary framing over arbitrary
+  byte streams with `BRCA` magic, packet headers, length fields, and CRC32 payload checksums.
+  The sync engine executes a "send only what the receiver lacks" protocol: the receiver
+  evaluates the Merkle manifest against its local CAS store, requests only missing hashes, and
+  verifies incoming chunks before committing. Transfers interrupted mid-flight resume by
+  querying the store, never re-transmitting already committed chunks.
 
-- **Fast Content-Defined Chunking (FastCDC)**:
-  - Gear hash matrix with normalized chunking mask to minimize chunk size variance.
-  - Configurable `min_size` (default 16 KiB), `avg_size` (default 64 KiB), `max_size` (default 256 KiB).
-  - Stream chunker processing streams and files without loading whole datasets into RAM.
-  - Content deduplication: small edits in multi-megabyte files leave >90% of chunks identical.
+## Platforms
 
-- **Content-Addressed Store**:
-  - Sharded directory structure: `.cas/chunks/ab/cd/<hash>`.
-  - Atomic chunk writes via temporary staging and atomic renaming.
-  - Automatic deduplication (write-once semantics).
-  - Integrity verification on read (detects disk corruption or bit rot).
-  - Root registration and Garbage Collection (`collect_garbage()`): mark-and-sweep from registered root manifests to safely reclaim unreferenced chunks.
+brocas is pure C++20 and has been tested and verified across all major desktop and server
+operating systems:
 
-- **Folder Manifests & Merkle DAG**:
-  - Directory and file tree representation with permissions, timestamps, sizes, and symlinks.
-  - Large files represented as Merkle trees of FastCDC chunks (`FileManifest`).
-  - Canonical, deterministic serialization format (sorted by entry name).
-  - `ingest_directory`: recursively ingest directories and return root Merkle hash.
-  - `checkout_directory`: extract manifest hash to target directory, restoring contents, permissions, timestamps, and symlinks.
-  - `diff_manifests`: diff two manifests to identify added, modified, deleted files and newly needed chunks.
+| Platform | Compiler | SIMD Acceleration | Verified Architectures |
+|---|---|---|---|
+| **Windows** | MSVC 2022+ | SSE2, SSE4.1, AVX2, AVX-512 run-time dispatch | x86-64 |
+| **Linux** | GCC 12+, Clang 15+ | SSE2, SSE4.1, AVX2, AVX-512 run-time dispatch | x86-64, aarch64 (NEON) |
+| **macOS** | Apple Clang (Xcode 14+) | ARM NEON vector instructions; x86-64 SSE/AVX | Apple silicon (arm64), x86-64 |
 
-- **Wire Sync Protocol ("Send only what the other side lacks")**:
-  - Binary framing over any byte stream / transport (`Magic: BRCA`, type, length, payload, CRC32).
-  - Structured messages: `Handshake`, `ManifestRequest`/`Response`, `HaveQuery`/`Response`, `WantChunks`, `ChunkData`, `Complete`, `Error`.
-  - Sync engine:
-    - Receiver traverses manifests, checks local CAS store, requests only missing chunks.
-    - Sender streams only missing chunks.
-    - Receiver verifies hashes and writes directly to local store.
-    - Resumable transfers: if connection drops mid-transfer, re-running sync checks local store and requests ONLY the remaining unverified chunks.
+SIMD acceleration targets are compiled into the BLAKE3 static object and selected dynamically
+at runtime via CPU feature discovery. On unsupported architectures, an optimized pure C
+portable implementation is selected automatically.
 
 ## Building
 
-There is nothing to fetch: BLAKE3 is vendored, and brocas needs only CMake 3.24+ and a C++20 compiler (MSVC, GCC or Clang).
+brocas requires CMake 3.24+ and a C++20 compiler. BLAKE3 is vendored in `third_party/blake3/`;
+there are no external third-party dependencies to install.
 
-### Windows (MSVC, Visual Studio generator)
+### Standalone Build
 
-```powershell
+```bash
+# Linux (GCC / Clang + Ninja)
+cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+ctest --test-dir build-release --output-on-failure
+
+# Windows (MSVC, Visual Studio 2022 or Ninja)
 cmake -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
-```
 
-### Linux (GCC 12+, Ninja)
-
-```bash
+# macOS (Apple Clang + Ninja)
 cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
 ctest --test-dir build-release --output-on-failure
 ```
 
-### macOS (Apple Clang, Ninja)
+### Consuming brocas as a Dependency
 
-```bash
-cmake -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release
-ctest --test-dir build-release --output-on-failure
+Downstream consumers embed or link `brocas::brocas`:
+
+```cmake
+add_subdirectory(path/to/brocas)
+target_link_libraries(your_target PRIVATE brocas::brocas)
 ```
+
+On Windows, `brocas::brocas` automatically exports a private dependency on `ws2_32` for
+network socket transport.
+
+In accordance with the ecosystem convention, consumers can locate `brocas` via:
+1. **Sibling checkout (development default):**
+   ```bash
+   git clone https://github.com/wlejon/brocas   # checked out next to consumer at ../brocas
+   ```
+2. **Submodule layout (isolated / CI builds):**
+   ```bash
+   git clone --recursive https://github.com/wlejon/consumer_repo
+   # or add as submodule:
+   git submodule add https://github.com/wlejon/brocas.git third_party/brocas
+   ```
 
 ## Tests
 
-The test suite runs real ctests that exercise the real OS file system and fail in Release mode (no `assert()`):
+The test suite runs real ctests executing against isolated temporary scratch directories
+(`ScopedTempDir`) and verifies behavior in both Debug and Release modes without assertions in
+library code:
 
-- `test_hash`: Official BLAKE3 test vectors, hex conversion round-trips, incremental and file hashing.
-- `test_fastcdc`: Gear hash bounds, stream consistency, and content deduplication ratio.
-- `test_store`: Atomic chunk storage, sharded path layout, disk corruption detection, root registration, mark-and-sweep garbage collection.
-- `test_manifest`: Recursive directory ingestion, Merkle DAG serialization, byte-exact checkout comparison, and manifest diffing.
-- `test_sync`: Wire protocol sync, "send only what receiver lacks", interrupted connection simulation (~50% transfer drop), and resuming with only remaining chunks.
-- `test_fuzz`: Fuzzing manifest parsers and wire protocol framing parser with corrupted, truncated, and random byte streams.
+- **`test_hash`:** Validates against official BLAKE3 test vectors, verifies hex serialization
+  and deserialization round-trips, tests incremental multi-buffer hashing, and exercises file
+  stream hashing.
+- **`test_fastcdc`:** Asserts Gear hash bounds, validates stream chunk boundary consistency,
+  and measures content deduplication efficiency across mutated test buffers.
+- **`test_store`:** Tests atomic chunk write staging, two-level sharded directory layout,
+  detection of simulated bit rot and disk corruption, manifest root registration, and
+  mark-and-sweep garbage collection.
+- **`test_manifest`:** Recursively ingests deep directory trees, verifies deterministic
+  Merkle DAG serialization, performs byte-exact checkout comparison (preserving file contents,
+  permissions, timestamps, and symlinks), and diffs manifests across tree mutations.
+- **`test_sync`:** Simulates end-to-end wire protocol synchronization, validates that the
+  sender transmits only chunks the receiver lacks, simulates broken connections (~50% wire
+  drop), and verifies that sync resumes seamlessly by requesting only unverified chunks.
+- **`test_fuzz`:** Fuzzes manifest parsers and the binary wire framing state machine with
+  truncated, corrupted, malformed, and random byte streams.
 
-All tests utilize `ScopedTempDir` and leave no lasting changes on any machine.
+All tests clean up their temporary files on completion with zero machine leftovers.
