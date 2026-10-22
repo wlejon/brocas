@@ -36,33 +36,61 @@ void restore_file_perms(const std::filesystem::path& p, uint32_t mode) {
     std::filesystem::permissions(p, perm, std::filesystem::perm_options::replace, ec);
 }
 
+bool is_valid_entry_name(std::string_view name) {
+    if (name.empty() || name == "." || name == "..") {
+        return false;
+    }
+    for (char c : name) {
+        if (c == '/' || c == '\\' || c == '\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 CheckoutStats checkout_directory(const Store& store, const Hash256& root_hash,
                                  const std::filesystem::path& target_dir,
                                  CheckoutOptions options) {
-    CheckoutStats stats;
-    std::error_code ec;
-    std::filesystem::create_directories(target_dir, ec);
+    if (root_hash.is_zero()) {
+        return CheckoutStats::failure();
+    }
 
     auto manifest_data = store.read_chunk(root_hash);
     if (!manifest_data) {
-        return stats;
+        return CheckoutStats::failure();
     }
 
     auto manifest = Manifest::deserialize(*manifest_data);
     if (!manifest) {
-        return stats;
+        return CheckoutStats::failure();
+    }
+
+    CheckoutStats stats;
+    std::error_code ec;
+    std::filesystem::create_directories(target_dir, ec);
+    if (ec) {
+        return CheckoutStats::failure();
     }
 
     for (const auto& entry : manifest->entries) {
+        if (!is_valid_entry_name(entry.name)) {
+            return CheckoutStats::failure();
+        }
         auto dest = target_dir / entry.name;
 
         if (entry.kind == EntryKind::Directory) {
             std::filesystem::create_directories(dest, ec);
+            if (ec) {
+                return CheckoutStats::failure();
+            }
             stats.dirs_created++;
 
             CheckoutStats sub_stats = checkout_directory(store, entry.hash, dest, options);
+            if (!sub_stats) {
+                return CheckoutStats::failure();
+            }
             stats.files_created += sub_stats.files_created;
             stats.dirs_created += sub_stats.dirs_created;
             stats.symlinks_created += sub_stats.symlinks_created;
@@ -76,54 +104,86 @@ CheckoutStats checkout_directory(const Store& store, const Hash256& root_hash,
             }
         } else if (entry.kind == EntryKind::Regular) {
             auto chunk_data = store.read_chunk(entry.hash);
-            if (chunk_data) {
-                std::ofstream f(dest, std::ios::binary | std::ios::trunc);
+            if (!chunk_data) {
+                return CheckoutStats::failure();
+            }
+            std::ofstream f(dest, std::ios::binary | std::ios::trunc);
+            if (!f.is_open()) {
+                return CheckoutStats::failure();
+            }
+            if (!chunk_data->empty()) {
+                f.write(reinterpret_cast<const char*>(chunk_data->data()),
+                        static_cast<std::streamsize>(chunk_data->size()));
+            }
+            f.flush();
+            if (!f.good()) {
+                f.close();
+                std::filesystem::remove(dest, ec);
+                return CheckoutStats::failure();
+            }
+            f.close();
+
+            stats.files_created++;
+            stats.total_bytes += entry.size;
+
+            if (options.restore_permissions) {
+                restore_file_perms(dest, entry.mode);
+            }
+            if (options.restore_mtime) {
+                restore_file_mtime(dest, entry.mtime);
+            }
+        } else if (entry.kind == EntryKind::MultiChunkRegular) {
+            auto fm_data = store.read_chunk(entry.hash);
+            if (!fm_data) {
+                return CheckoutStats::failure();
+            }
+            auto fm = FileManifest::deserialize(*fm_data);
+            if (!fm) {
+                return CheckoutStats::failure();
+            }
+            std::ofstream f(dest, std::ios::binary | std::ios::trunc);
+            if (!f.is_open()) {
+                return CheckoutStats::failure();
+            }
+            for (const auto& chunk : fm->chunks) {
+                auto chunk_data = store.read_chunk(chunk.hash);
+                if (!chunk_data) {
+                    f.close();
+                    std::filesystem::remove(dest, ec);
+                    return CheckoutStats::failure();
+                }
                 if (!chunk_data->empty()) {
                     f.write(reinterpret_cast<const char*>(chunk_data->data()),
                             static_cast<std::streamsize>(chunk_data->size()));
                 }
-                f.close();
-
-                stats.files_created++;
-                stats.total_bytes += entry.size;
-
-                if (options.restore_permissions) {
-                    restore_file_perms(dest, entry.mode);
-                }
-                if (options.restore_mtime) {
-                    restore_file_mtime(dest, entry.mtime);
-                }
             }
-        } else if (entry.kind == EntryKind::MultiChunkRegular) {
-            auto fm_data = store.read_chunk(entry.hash);
-            if (fm_data) {
-                auto fm = FileManifest::deserialize(*fm_data);
-                if (fm) {
-                    std::ofstream f(dest, std::ios::binary | std::ios::trunc);
-                    for (const auto& chunk : fm->chunks) {
-                        auto chunk_data = store.read_chunk(chunk.hash);
-                        if (chunk_data && !chunk_data->empty()) {
-                            f.write(reinterpret_cast<const char*>(chunk_data->data()),
-                                    static_cast<std::streamsize>(chunk_data->size()));
-                        }
-                    }
-                    f.close();
+            f.flush();
+            if (!f.good()) {
+                f.close();
+                std::filesystem::remove(dest, ec);
+                return CheckoutStats::failure();
+            }
+            f.close();
 
-                    stats.files_created++;
-                    stats.total_bytes += entry.size;
+            stats.files_created++;
+            stats.total_bytes += entry.size;
 
-                    if (options.restore_permissions) {
-                        restore_file_perms(dest, entry.mode);
-                    }
-                    if (options.restore_mtime) {
-                        restore_file_mtime(dest, entry.mtime);
-                    }
-                }
+            if (options.restore_permissions) {
+                restore_file_perms(dest, entry.mode);
+            }
+            if (options.restore_mtime) {
+                restore_file_mtime(dest, entry.mtime);
             }
         } else if (entry.kind == EntryKind::Symlink) {
             if (options.restore_symlinks) {
+                if (entry.symlink_target.empty()) {
+                    return CheckoutStats::failure();
+                }
                 std::filesystem::remove(dest, ec);
                 std::filesystem::create_symlink(entry.symlink_target, dest, ec);
+                if (ec) {
+                    return CheckoutStats::failure();
+                }
             }
             stats.symlinks_created++;
         }

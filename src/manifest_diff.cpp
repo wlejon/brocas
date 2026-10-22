@@ -9,7 +9,7 @@ namespace bro::cas {
 namespace {
 
 void collect_entry_hashes(const Store& store, const FileEntry& entry, std::set<Hash256>& out) {
-    if (entry.hash.is_zero()) return;
+    if (entry.hash.is_zero() || entry.kind == EntryKind::Symlink) return;
     out.insert(entry.hash);
 
     if (entry.kind == EntryKind::Directory) {
@@ -42,9 +42,9 @@ void diff_recursive(const Store& store, const Hash256& old_hash, const Hash256& 
 
     std::optional<Manifest> new_man;
     if (!new_hash.is_zero()) {
+        diff.needed_chunks.insert(new_hash);
         if (auto data = store.read_chunk(new_hash)) {
             new_man = Manifest::deserialize(*data);
-            diff.needed_chunks.insert(new_hash);
         }
     }
 
@@ -67,13 +67,26 @@ void diff_recursive(const Store& store, const Hash256& old_hash, const Hash256& 
         std::string rel_path = prefix.empty() ? name : (prefix + "/" + name);
         auto it = old_entries.find(name);
         if (it == old_entries.end()) {
-            diff.added_files.push_back(rel_path);
-            collect_entry_hashes(store, *new_entry, diff.needed_chunks);
+            if (new_entry->kind == EntryKind::Directory) {
+                collect_entry_hashes(store, *new_entry, diff.needed_chunks);
+                diff_recursive(store, Hash256{}, new_entry->hash, rel_path, diff);
+            } else {
+                diff.added_files.push_back(rel_path);
+                collect_entry_hashes(store, *new_entry, diff.needed_chunks);
+            }
         } else {
             const auto* old_entry = it->second;
-            if (old_entry->hash != new_entry->hash) {
+            if (old_entry->hash != new_entry->hash || old_entry->kind != new_entry->kind) {
                 if (old_entry->kind == EntryKind::Directory && new_entry->kind == EntryKind::Directory) {
                     diff_recursive(store, old_entry->hash, new_entry->hash, rel_path, diff);
+                } else if (old_entry->kind == EntryKind::Directory && new_entry->kind != EntryKind::Directory) {
+                    diff_recursive(store, old_entry->hash, Hash256{}, rel_path, diff);
+                    diff.added_files.push_back(rel_path);
+                    collect_entry_hashes(store, *new_entry, diff.needed_chunks);
+                } else if (old_entry->kind != EntryKind::Directory && new_entry->kind == EntryKind::Directory) {
+                    diff.deleted_files.push_back(rel_path);
+                    collect_entry_hashes(store, *new_entry, diff.needed_chunks);
+                    diff_recursive(store, Hash256{}, new_entry->hash, rel_path, diff);
                 } else {
                     diff.modified_files.push_back(rel_path);
                     collect_entry_hashes(store, *new_entry, diff.needed_chunks);
@@ -86,7 +99,11 @@ void diff_recursive(const Store& store, const Hash256& old_hash, const Hash256& 
     for (const auto& [name, old_entry] : old_entries) {
         if (new_entries.find(name) == new_entries.end()) {
             std::string rel_path = prefix.empty() ? name : (prefix + "/" + name);
-            diff.deleted_files.push_back(rel_path);
+            if (old_entry->kind == EntryKind::Directory) {
+                diff_recursive(store, old_entry->hash, Hash256{}, rel_path, diff);
+            } else {
+                diff.deleted_files.push_back(rel_path);
+            }
         }
     }
 }
@@ -110,6 +127,9 @@ std::set<Hash256> collect_manifest_reachable_hashes(const Store& store, const Ha
 
         if (auto man = Manifest::deserialize(*data)) {
             for (const auto& entry : man->entries) {
+                if (entry.kind == EntryKind::Symlink) {
+                    continue;
+                }
                 if (!entry.hash.is_zero()) {
                     if (reachable.insert(entry.hash).second) {
                         if (entry.kind == EntryKind::Directory ||

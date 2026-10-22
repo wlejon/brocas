@@ -153,9 +153,50 @@ void test_sync_interrupted_and_resumed() {
     TEST_CHECK_TRUE(ScopedTempDir::compare_trees_byte_exact(src_dir.path(), dst_dir.path()));
 }
 
+void test_sync_manifest_with_symlinks() {
+    ScopedTempDir src_dir("test_sync_sym_src");
+    ScopedTempDir dst_dir("test_sync_sym_dst");
+    ScopedTempDir sender_store_dir("test_sync_sym_sender");
+    ScopedTempDir receiver_store_dir("test_sync_sym_recv");
+
+    Store sender_store(sender_store_dir.path());
+    Store receiver_store(receiver_store_dir.path());
+
+    src_dir.create_file("target.txt", "Symlink target file contents");
+    src_dir.create_dir("subdir");
+    src_dir.create_file("subdir/nested.txt", "Nested file");
+    std::filesystem::create_symlink("target.txt", src_dir.path() / "top_link");
+    std::filesystem::create_symlink("../target.txt", src_dir.path() / "subdir" / "nested_link");
+
+    Hash256 root_hash = ingest_directory(sender_store, src_dir.path());
+    TEST_CHECK_FALSE(root_hash.is_zero());
+
+    auto [client_t, server_t] = MemoryTransport::create_pair();
+    SyncSender sender(sender_store);
+    SyncReceiver receiver(receiver_store);
+
+    std::thread sender_thread([&] {
+        sender.run(*server_t);
+    });
+
+    SyncStats stats;
+    bool ok = receiver.sync_manifest(*client_t, root_hash, &stats);
+    TEST_CHECK_TRUE(ok);
+
+    client_t->close();
+    server_t->close();
+    sender_thread.join();
+
+    auto cstats = checkout_directory(receiver_store, root_hash, dst_dir.path());
+    TEST_CHECK_TRUE(cstats.has_value());
+    TEST_CHECK_EQ(cstats.symlinks_created, 2U);
+    TEST_CHECK_TRUE(ScopedTempDir::compare_trees_byte_exact(src_dir.path(), dst_dir.path()));
+}
+
 int main() {
     test_sync_send_only_what_receiver_lacks();
     test_sync_interrupted_and_resumed();
+    test_sync_manifest_with_symlinks();
     std::cout << "All sync tests passed!" << std::endl;
     return 0;
 }

@@ -15,6 +15,18 @@ namespace {
 
 std::atomic<uint64_t> g_temp_counter{0};
 
+bool is_valid_root_name(std::string_view name) {
+    if (name.empty() || name == "." || name == "..") {
+        return false;
+    }
+    for (char c : name) {
+        if (c == '/' || c == '\\' || c == '\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 Store::Store(std::filesystem::path root_dir, StoreOptions options)
@@ -183,7 +195,7 @@ bool Store::read_chunk_to(const Hash256& hash, std::vector<uint8_t>& out) const 
 }
 
 bool Store::register_root(const std::string& name, const Hash256& root_hash) {
-    if (name.empty()) return false;
+    if (!is_valid_root_name(name)) return false;
     init_directories();
 
     auto path = roots_dir_ / name;
@@ -198,12 +210,14 @@ bool Store::register_root(const std::string& name, const Hash256& root_hash) {
 }
 
 bool Store::unregister_root(const std::string& name) {
+    if (!is_valid_root_name(name)) return false;
     auto path = roots_dir_ / name;
     std::error_code ec;
     return std::filesystem::remove(path, ec);
 }
 
 std::optional<Hash256> Store::get_root(const std::string& name) const {
+    if (!is_valid_root_name(name)) return std::nullopt;
     auto path = roots_dir_ / name;
     std::ifstream file(path);
     if (!file.is_open()) return std::nullopt;

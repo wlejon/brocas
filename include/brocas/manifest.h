@@ -78,9 +78,35 @@ struct CheckoutStats {
     size_t dirs_created = 0;
     size_t symlinks_created = 0;
     uint64_t total_bytes = 0;
+    bool ok = true;
+
+    static CheckoutStats failure() noexcept {
+        CheckoutStats s;
+        s.ok = false;
+        return s;
+    }
+
+    explicit constexpr operator bool() const noexcept { return ok; }
+    constexpr bool has_value() const noexcept { return ok; }
+    constexpr const CheckoutStats& value() const noexcept { return *this; }
+    constexpr const CheckoutStats* operator->() const noexcept { return this; }
+    constexpr const CheckoutStats& operator*() const noexcept { return *this; }
 
     auto operator<=>(const CheckoutStats& other) const = default;
     bool operator==(const CheckoutStats& other) const = default;
+
+    friend constexpr bool operator==(const CheckoutStats& s, std::nullopt_t) noexcept {
+        return !s.ok;
+    }
+    friend constexpr bool operator==(std::nullopt_t, const CheckoutStats& s) noexcept {
+        return !s.ok;
+    }
+    friend constexpr bool operator!=(const CheckoutStats& s, std::nullopt_t) noexcept {
+        return s.ok;
+    }
+    friend constexpr bool operator!=(std::nullopt_t, const CheckoutStats& s) noexcept {
+        return s.ok;
+    }
 };
 
 struct ManifestDiff {

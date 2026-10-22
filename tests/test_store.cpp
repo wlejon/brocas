@@ -98,6 +98,14 @@ void test_store_roots_and_gc() {
     Hash256 man_hash = store.put_chunk(man_bytes);
 
     // Register root
+    TEST_CHECK_FALSE(store.register_root("../escape", man_hash));
+    TEST_CHECK_FALSE(store.register_root("..", man_hash));
+    TEST_CHECK_FALSE(store.register_root(".", man_hash));
+    TEST_CHECK_FALSE(store.register_root("sub/root", man_hash));
+    TEST_CHECK_FALSE(store.register_root("sub\\root", man_hash));
+    TEST_CHECK_FALSE(store.get_root("../escape").has_value());
+    TEST_CHECK_FALSE(store.unregister_root("../escape"));
+
     TEST_CHECK_TRUE(store.register_root("release-1.0", man_hash));
     auto root_opt = store.get_root("release-1.0");
     TEST_CHECK_TRUE(root_opt.has_value());
